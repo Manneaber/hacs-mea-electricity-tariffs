@@ -106,7 +106,9 @@ class MeaElectricityTariffSensor(SensorEntity):
         if isinstance(year, int) and isinstance(dates, list):
             self._stored_year = year
             self._holidays = {
-                datetime.date.fromisoformat(date) for date in dates if isinstance(date, str)
+                datetime.date.fromisoformat(date)
+                for date in dates
+                if isinstance(date, str)
             }
             self._last_update = stored.get("last_update")
 
@@ -126,7 +128,9 @@ class MeaElectricityTariffSensor(SensorEntity):
                 await self._store.async_save(
                     {
                         "year": self._stored_year,
-                        "holiday_dates": [date.isoformat() for date in sorted(self._holidays)],
+                        "holiday_dates": [
+                            date.isoformat() for date in sorted(self._holidays)
+                        ],
                         "last_update": self._last_update,
                     }
                 )
@@ -135,7 +139,9 @@ class MeaElectricityTariffSensor(SensorEntity):
 
         self._state = self._compute_state(now.date(), now.time())
 
-    def _compute_state(self, current_date: datetime.date, current_time: datetime.time) -> str:
+    def _compute_state(
+        self, current_date: datetime.date, current_time: datetime.time
+    ) -> str:
         if current_date in self._holidays:
             return "off-peak"
 
@@ -155,8 +161,12 @@ class MeaElectricityTariffSensor(SensorEntity):
         text = await response.text()
         return self._parse_holiday_table(text, current_thai_year)
 
-    def _parse_holiday_table(self, html_text: str, current_thai_year: int) -> set[datetime.date]:
-        table_match = re.search(r"<table[^>]*class=\"table\"[^>]*>(.*?)</table>", html_text, re.S | re.I)
+    def _parse_holiday_table(
+        self, html_text: str, current_thai_year: int
+    ) -> set[datetime.date]:
+        table_match = re.search(
+            r"<table[^>]*class=\"table\"[^>]*>(.*?)</table>", html_text, re.S | re.I
+        )
         if not table_match:
             raise ValueError("Unable to find tariff table")
 
@@ -202,7 +212,7 @@ class MeaElectricityTariffSensor(SensorEntity):
         return text.strip()
 
     def _parse_thai_date(self, date_text: str, year: int) -> datetime.date:
-        date_text = date_text.replace("\u00A0", " ").strip()
+        date_text = date_text.replace("\u00a0", " ").strip()
         match = re.search(r"(\d{1,2})\s+([ก-๙]+)", date_text)
         if not match:
             raise ValueError("Invalid Thai date text")
