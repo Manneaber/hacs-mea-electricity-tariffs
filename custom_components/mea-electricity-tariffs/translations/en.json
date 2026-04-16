@@ -13,10 +13,5 @@
     "create_entry": {
       "title": "MEA Electricity Tariffs"
     }
-  },
-  "entity": {
-    "sensor": {
-      "name": "MEA Electricity Tariff"
-    }
   }
 }
