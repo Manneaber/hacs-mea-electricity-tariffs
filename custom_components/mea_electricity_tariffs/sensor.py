@@ -36,7 +36,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the MEA Electricity Tariff sensor platform from a config entry."""
-    coordinator: MeaTariffCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    coordinator: MeaTariffCoordinator = hass.data[DOMAIN][entry.entry_id][
+        DATA_COORDINATOR
+    ]
     sensors: list[SensorEntity] = [
         MeaTariffPriceSensor(coordinator, key, name)
         for key, name in PRICE_SENSOR_DEFINITIONS
@@ -184,9 +186,7 @@ class MeaTariffCoordinator:
 
         if isinstance(prices, dict):
             self._prices = {
-                key: float(value)
-                for key, value in prices.items()
-                if value is not None
+                key: float(value) for key, value in prices.items() if value is not None
             }
 
         if isinstance(ft_price, (int, float, str)):
@@ -202,9 +202,7 @@ class MeaTariffCoordinator:
         if isinstance(holiday_year, int) and isinstance(dates, list):
             self._stored_holiday_year = holiday_year
             self._holidays = {
-                datetime.date.fromisoformat(d)
-                for d in dates
-                if isinstance(d, str)
+                datetime.date.fromisoformat(d) for d in dates if isinstance(d, str)
             }
             self._last_holiday_update = stored.get("last_holiday_update")
 
@@ -361,5 +359,6 @@ class MeaElectricityTariffSensor(_CoordinatorEntity):
     @property
     def native_value(self) -> str:
         now = dt_util.as_local(dt_util.utcnow())
-        return _compute_tou_state(now.date(), now.time(), self.coordinator.get_holidays())
-
+        return _compute_tou_state(
+            now.date(), now.time(), self.coordinator.get_holidays()
+        )

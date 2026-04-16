@@ -1,11 +1,17 @@
 """Pure HTML/text parsing helpers for MEA tariff and holiday data."""
+
 from __future__ import annotations
 
 import datetime
 import html
 import re
 
-from .const import MONTHS_TH, PRICE_SENSOR_DEFINITIONS, TARIFF_ROW_MATCHERS, TARIFF_TOU_MATCHERS
+from .const import (
+    MONTHS_TH,
+    PRICE_SENSOR_DEFINITIONS,
+    TARIFF_ROW_MATCHERS,
+    TARIFF_TOU_MATCHERS,
+)
 
 
 def clean_html_cell(text: str) -> str:
@@ -58,7 +64,8 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
                 break
 
     missing = [
-        key for key, _ in PRICE_SENSOR_DEFINITIONS
+        key
+        for key, _ in PRICE_SENSOR_DEFINITIONS
         if key != "ft_price" and key not in prices
     ]
     if missing:

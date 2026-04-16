@@ -46,7 +46,9 @@ class MeaTariffRefreshButton(ButtonEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._remove_listener = self.coordinator.async_add_listener(self._handle_coordinator_update)
+        self._remove_listener = self.coordinator.async_add_listener(
+            self._handle_coordinator_update
+        )
 
     async def async_will_remove_from_hass(self) -> None:
         if self._remove_listener is not None:
