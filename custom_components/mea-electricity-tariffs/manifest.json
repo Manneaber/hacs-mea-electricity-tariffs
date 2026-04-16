@@ -1,12 +1,12 @@
 {
   "domain": "mea-electricity-tariffs",
-  "version": "0.1.0",
   "name": "MEA Electricity Tariffs",
-  "issue_tracker": "https://github.com/Manneaber/hacs-mea-electricity-tariffs/issues",
-  "documentation": "https://github.com/Manneaber/hacs-mea-electricity-tariffs",
   "codeowners": ["@Manneaber"],
   "dependencies": [],
-  "iot_class": "cloud_polling",
+  "documentation": "https://github.com/Manneaber/hacs-mea-electricity-tariffs",
+  "issue_tracker": "https://github.com/Manneaber/hacs-mea-electricity-tariffs/issues",
   "integration_type": "entity",
-  "requirements": []
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "0.1.0"
 }
