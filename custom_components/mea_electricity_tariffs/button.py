@@ -3,6 +3,7 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DATA_COORDINATOR, DEVICE_MANUFACTURER, DEVICE_NAME, DOMAIN
@@ -36,12 +37,12 @@ class MeaTariffRefreshButton(ButtonEntity):
         return self.coordinator.available
 
     @property
-    def device_info(self) -> dict[str, str]:
-        return {
-            "identifiers": {(DOMAIN, DOMAIN)},
-            "name": DEVICE_NAME,
-            "manufacturer": DEVICE_MANUFACTURER,
-        }
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, DOMAIN)},
+            name=DEVICE_NAME,
+            manufacturer=DEVICE_MANUFACTURER,
+        )
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()

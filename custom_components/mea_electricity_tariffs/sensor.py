@@ -7,6 +7,7 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
@@ -18,6 +19,7 @@ from .const import (
     DEVICE_NAME,
     DOMAIN,
     FT_URL,
+    PRICE_SENSOR_DEFINITIONS,
     PRICE_UNIT,
     STATE_SENSOR_NAME,
     STATE_URL,
@@ -43,11 +45,11 @@ async def async_setup_entry(
     async_add_entities(sensors)
 
 
-_DEVICE_INFO: dict = {
-    "identifiers": {(DOMAIN, DOMAIN)},
-    "name": DEVICE_NAME,
-    "manufacturer": DEVICE_MANUFACTURER,
-}
+_DEVICE_INFO = DeviceInfo(
+    identifiers={(DOMAIN, DOMAIN)},
+    name=DEVICE_NAME,
+    manufacturer=DEVICE_MANUFACTURER,
+)
 
 
 class MeaTariffCoordinator:
@@ -309,7 +311,7 @@ class _CoordinatorEntity(SensorEntity):
         return self.coordinator.available
 
     @property
-    def device_info(self) -> dict:
+    def device_info(self) -> DeviceInfo:
         return _DEVICE_INFO
 
     async def async_added_to_hass(self) -> None:

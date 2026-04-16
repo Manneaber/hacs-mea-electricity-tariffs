@@ -17,7 +17,7 @@ FT_URL = "https://www.pea.co.th/en/our-services/tariff/ft"
 STATE_SENSOR_NAME = "MEA Time-of-Use State"
 PRICE_UNIT = "THB/kWh"
 DEVICE_NAME = "MEA Electricity Tariffs"
-DEVICE_MANUFACTURER = "MEA"
+DEVICE_MANUFACTURER = "Manneaber"
 
 # Thai months
 MONTHS_TH = {
