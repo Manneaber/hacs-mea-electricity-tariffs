@@ -5,8 +5,8 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/Manneaber/hacs-mea-electricity-tariffs",
-  "iot_class": "cloud_polling",
   "integration_type": "entity",
+  "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/Manneaber/hacs-mea-electricity-tariffs/issues",
   "version": "0.1.0"
 }
