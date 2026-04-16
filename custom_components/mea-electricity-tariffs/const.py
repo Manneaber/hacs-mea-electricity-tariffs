@@ -1,2 +1,4 @@
+from homeassistant.const import Platform
+
 DOMAIN = "mea-electricity-tariffs"
-PLATFORMS = ["sensor"]
+PLATFORMS = [Platform.SENSOR]
