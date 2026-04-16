@@ -5,6 +5,7 @@ import html
 import re
 
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -39,6 +40,15 @@ async def async_setup_platform(
     discovery_info=None,
 ) -> None:
     """Set up the MEA Electricity Tariff sensor platform."""
+    async_add_entities([MeaElectricityTariffSensor(hass)])
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the MEA Electricity Tariff sensor platform from a config entry."""
     async_add_entities([MeaElectricityTariffSensor(hass)])
 
 

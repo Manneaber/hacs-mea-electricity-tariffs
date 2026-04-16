@@ -1,0 +1,22 @@
+{
+  "title": "MEA Electricity Tariffs",
+  "config": {
+    "step": {
+      "user": {
+        "title": "MEA Electricity Tariffs",
+        "description": "Add the MEA Electricity Tariffs integration to create an off-peak / on-peak sensor."
+      }
+    },
+    "abort": {
+      "already_configured": "This integration is already configured."
+    },
+    "create_entry": {
+      "title": "MEA Electricity Tariffs"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "name": "MEA Electricity Tariff"
+    }
+  }
+}
