@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import datetime
-import html
-import re
-from typing import Any, Callable
+from typing import Callable
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -14,58 +12,20 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
-
-STATE_STORAGE_KEY = "mea_electricity_tariff_off_peak"
-STATE_STORAGE_VERSION = 1
-PRICE_STORAGE_KEY = "mea_electricity_tariff_prices"
-PRICE_STORAGE_VERSION = 1
-STATE_URL = "https://www.mea.or.th/electricity/electricity-tariffs/B0kv94Yol"
-TARIFF_URL = "https://www.mea.or.th/our-services/tariff-calculation/other/D5xEaEwgU"
-FT_URL = "https://www.pea.co.th/en/our-services/tariff/ft"
-STATE_SENSOR_NAME = "MEA Time-of-Use State"
-PRICE_UNIT = "THB/kWh"
-MONTHS_TH = {
-    "มกราคม": 1,
-    "กุมภาพันธ์": 2,
-    "มีนาคม": 3,
-    "เมษายน": 4,
-    "พฤษภาคม": 5,
-    "มิถุนายน": 6,
-    "กรกฎาคม": 7,
-    "สิงหาคม": 8,
-    "กันยายน": 9,
-    "ตุลาคม": 10,
-    "พฤศจิกายน": 11,
-    "ธันวาคม": 12,
-}
-
-PRICE_SENSOR_DEFINITIONS = [
-    ("base_1_15", "MEA Tariff 15 units first (1 – 15)"),
-    ("base_16_25", "MEA Tariff 10 units next (16 – 25)"),
-    ("base_26_35", "MEA Tariff 10 units next (26 – 35)"),
-    ("base_36_100", "MEA Tariff 65 units next (36 – 100)"),
-    ("base_101_150", "MEA Tariff 50 units next (101 – 150)"),
-    ("base_151_400", "MEA Tariff 250 units next (151 – 400)"),
-    ("base_401_plus", "MEA Tariff above 400 units"),
-    ("tou_12_24_on_peak", "MEA TOU 12–24 kV On Peak"),
-    ("tou_12_24_off_peak", "MEA TOU 12–24 kV Off Peak"),
-    ("tou_lt_12_on_peak", "MEA TOU under 12 kV On Peak"),
-    ("tou_lt_12_off_peak", "MEA TOU under 12 kV Off Peak"),
-    ("ft_price", "MEA FT Price"),
-]
-
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config: dict[str, Any],
-    async_add_entities: AddEntitiesCallback,
-    discovery_info=None,
-) -> None:
-    """Set up the MEA Electricity Tariff sensor platform."""
-    coordinator = MeaTariffPricingCoordinator(hass)
-    await coordinator.async_initialize()
-    async_add_entities(_build_price_entities(coordinator) + [MeaElectricityTariffSensor(hass)])
+from .const import (
+    DATA_COORDINATOR,
+    DEVICE_MANUFACTURER,
+    DEVICE_NAME,
+    DOMAIN,
+    FT_URL,
+    PRICE_UNIT,
+    STATE_SENSOR_NAME,
+    STATE_URL,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+    TARIFF_URL,
+)
+from .parser import parse_ft_page, parse_holiday_table, parse_tariff_page
 
 
 async def async_setup_entry(
@@ -74,32 +34,40 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the MEA Electricity Tariff sensor platform from a config entry."""
-    coordinator = MeaTariffPricingCoordinator(hass)
-    await coordinator.async_initialize()
-    async_add_entities(_build_price_entities(coordinator) + [MeaElectricityTariffSensor(hass)])
-
-
-def _build_price_entities(coordinator: "MeaTariffPricingCoordinator") -> list[SensorEntity]:
-    return [
+    coordinator: MeaTariffCoordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
+    sensors: list[SensorEntity] = [
         MeaTariffPriceSensor(coordinator, key, name)
         for key, name in PRICE_SENSOR_DEFINITIONS
     ]
+    sensors.append(MeaElectricityTariffSensor(coordinator))
+    async_add_entities(sensors)
 
 
-class MeaTariffPricingCoordinator:
-    """Shared data manager for MEA tariff prices."""
+_DEVICE_INFO: dict = {
+    "identifiers": {(DOMAIN, DOMAIN)},
+    "name": DEVICE_NAME,
+    "manufacturer": DEVICE_MANUFACTURER,
+}
+
+
+class MeaTariffCoordinator:
+    """Shared data manager for MEA tariff prices and holidays."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._store = Store(hass, PRICE_STORAGE_VERSION, PRICE_STORAGE_KEY)
+        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._prices: dict[str, float] = {}
         self._ft_price: float | None = None
-        self._stored_year: int | None = None
-        self._stored_month: int | None = None
-        self._last_update: str | None = None
+        self._stored_price_year: int | None = None
+        self._stored_price_month: int | None = None
+        self._holidays: set[datetime.date] = set()
+        self._stored_holiday_year: int | None = None
+        self._last_price_update: str | None = None
+        self._last_holiday_update: str | None = None
         self._available = True
         self._listeners: list[Callable[[], None]] = []
-        self._unsub_refresh = None
+        self._unsub_daily = None
+        self._unsub_hourly = None
 
     @property
     def available(self) -> bool:
@@ -110,16 +78,61 @@ class MeaTariffPricingCoordinator:
             return self._ft_price
         return self._prices.get(key)
 
+    def get_holidays(self) -> set[datetime.date]:
+        return self._holidays
+
     async def async_initialize(self) -> None:
         await self._load()
-        await self._refresh_if_needed()
-        self._unsub_refresh = async_track_time_change(
+        await self._refresh_prices_if_needed()
+        await self._refresh_holidays_if_needed()
+        self._unsub_daily = async_track_time_change(
             self.hass,
             self._async_daily_refresh,
             hour=0,
             minute=0,
             second=0,
         )
+        self._unsub_hourly = async_track_time_change(
+            self.hass,
+            self._async_hourly_refresh,
+            minute=0,
+            second=0,
+        )
+
+    async def async_force_refresh(self) -> None:
+        """Force a fetch from the remote sources, bypassing cache."""
+        try:
+            await self._fetch_prices()
+            now = dt_util.now()
+            self._stored_price_year = now.year
+            self._stored_price_month = now.month
+            self._last_price_update = dt_util.utcnow().isoformat()
+        except Exception:
+            pass
+
+        try:
+            now_local = dt_util.as_local(dt_util.utcnow())
+            current_thai_year = now_local.year + 543
+            holidays = await self._fetch_holidays(current_thai_year)
+            if holidays:
+                self._holidays = holidays
+                self._stored_holiday_year = current_thai_year
+                self._last_holiday_update = dt_util.utcnow().isoformat()
+        except Exception:
+            pass
+
+        await self._save()
+        self._available = True
+        self._async_notify_listeners()
+
+    async def async_cleanup(self) -> None:
+        """Cancel scheduled timers."""
+        if self._unsub_daily is not None:
+            self._unsub_daily()
+            self._unsub_daily = None
+        if self._unsub_hourly is not None:
+            self._unsub_hourly()
+            self._unsub_hourly = None
 
     def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(listener)
@@ -137,26 +150,35 @@ class MeaTariffPricingCoordinator:
 
     @callback
     def _async_daily_refresh(self, now: datetime.datetime) -> None:
-        self.hass.async_create_task(self._refresh_and_notify())
+        self.hass.async_create_task(self._daily_refresh())
 
-    async def _refresh_and_notify(self) -> None:
-        updated = await self._refresh_if_needed()
+    @callback
+    def _async_hourly_refresh(self, now: datetime.datetime) -> None:
+        self.hass.async_create_task(self._hourly_refresh())
+
+    async def _daily_refresh(self) -> None:
+        updated = await self._refresh_prices_if_needed()
+        updated = (await self._refresh_holidays_if_needed()) or updated
         if updated:
             self._async_notify_listeners()
+
+    async def _hourly_refresh(self) -> None:
+        # Notify listeners so the state sensor recalculates on the hour
+        self._async_notify_listeners()
 
     async def _load(self) -> None:
         stored = await self._store.async_load()
         if not stored:
             return
 
-        year = stored.get("year")
-        month = stored.get("month")
+        year = stored.get("price_year")
+        month = stored.get("price_month")
         prices = stored.get("prices", {})
         ft_price = stored.get("ft_price")
 
         if isinstance(year, int) and isinstance(month, int):
-            self._stored_year = year
-            self._stored_month = month
+            self._stored_price_year = year
+            self._stored_price_month = month
 
         if isinstance(prices, dict):
             self._prices = {
@@ -171,28 +193,49 @@ class MeaTariffPricingCoordinator:
             except ValueError:
                 self._ft_price = None
 
-        self._last_update = stored.get("last_update")
+        self._last_price_update = stored.get("last_price_update")
 
-    async def _refresh_if_needed(self) -> bool:
+        holiday_year = stored.get("holiday_year")
+        dates = stored.get("holiday_dates", [])
+        if isinstance(holiday_year, int) and isinstance(dates, list):
+            self._stored_holiday_year = holiday_year
+            self._holidays = {
+                datetime.date.fromisoformat(d)
+                for d in dates
+                if isinstance(d, str)
+            }
+            self._last_holiday_update = stored.get("last_holiday_update")
+
+    async def _save(self) -> None:
+        await self._store.async_save(
+            {
+                "price_year": self._stored_price_year,
+                "price_month": self._stored_price_month,
+                "prices": self._prices,
+                "ft_price": self._ft_price,
+                "last_price_update": self._last_price_update,
+                "holiday_year": self._stored_holiday_year,
+                "holiday_dates": [d.isoformat() for d in sorted(self._holidays)],
+                "last_holiday_update": self._last_holiday_update,
+            }
+        )
+
+    async def _refresh_prices_if_needed(self) -> bool:
         now = dt_util.now()
-        if self._stored_year == now.year and self._stored_month == now.month:
-            if self._prices and self._ft_price is not None:
-                return False
+        if (
+            self._stored_price_year == now.year
+            and self._stored_price_month == now.month
+            and self._prices
+            and self._ft_price is not None
+        ):
+            return False
 
         try:
             await self._fetch_prices()
-            self._stored_year = now.year
-            self._stored_month = now.month
-            self._last_update = dt_util.utcnow().isoformat()
-            await self._store.async_save(
-                {
-                    "year": self._stored_year,
-                    "month": self._stored_month,
-                    "prices": self._prices,
-                    "ft_price": self._ft_price,
-                    "last_update": self._last_update,
-                }
-            )
+            self._stored_price_year = now.year
+            self._stored_price_month = now.month
+            self._last_price_update = dt_util.utcnow().isoformat()
+            await self._save()
             self._available = True
             return True
         except Exception:
@@ -200,112 +243,65 @@ class MeaTariffPricingCoordinator:
                 self._available = False
             return False
 
+    async def _refresh_holidays_if_needed(self) -> bool:
+        now_local = dt_util.as_local(dt_util.utcnow())
+        current_thai_year = now_local.year + 543
+        if self._stored_holiday_year == current_thai_year and self._holidays:
+            return False
+
+        try:
+            holidays = await self._fetch_holidays(current_thai_year)
+            if holidays:
+                self._holidays = holidays
+                self._stored_holiday_year = current_thai_year
+                self._last_holiday_update = dt_util.utcnow().isoformat()
+                await self._save()
+                return True
+        except Exception:
+            if not self._holidays:
+                self._available = False
+        return False
+
     async def _fetch_prices(self) -> None:
         session = async_get_clientsession(self.hass)
 
         response = await session.get(TARIFF_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
-        tariff_text = await response.text()
-        self._prices = self._parse_tariff_page(tariff_text)
+        self._prices = parse_tariff_page(await response.text())
 
         response = await session.get(FT_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
-        ft_text = await response.text()
-        self._ft_price = self._parse_ft_page(ft_text)
+        self._ft_price = parse_ft_page(await response.text())
 
-    def _parse_tariff_page(self, html_text: str) -> dict[str, float]:
-        prices: dict[str, float] = {}
-        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I):
-            cells = [self._clean_text(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)]
-            if len(cells) < 2:
-                continue
-            label = cells[0]
-            price_text = cells[-1]
-            if not price_text:
-                continue
-            try:
-                price = self._parse_price(price_text)
-            except ValueError:
-                continue
-
-            if "1 – 15" in label and "15 หน่วย" in label:
-                prices["base_1_15"] = price
-            elif "16 – 25" in label and "10 หน่วยต่อไป" in label:
-                prices["base_16_25"] = price
-            elif "26 – 35" in label and "10 หน่วยต่อไป" in label:
-                prices["base_26_35"] = price
-            elif "36 – 100" in label and "65 หน่วยต่อไป" in label:
-                prices["base_36_100"] = price
-            elif "101 – 150" in label and "50 หน่วยต่อไป" in label:
-                prices["base_101_150"] = price
-            elif "151 – 400" in label and "250 หน่วยต่อไป" in label:
-                prices["base_151_400"] = price
-            elif "401" in label or "เกินกว่า 400" in label:
-                prices["base_401_plus"] = price
-            elif label.startswith("1.3.1"):
-                if len(cells) >= 3:
-                    prices["tou_12_24_on_peak"] = self._parse_price(cells[1])
-                    prices["tou_12_24_off_peak"] = self._parse_price(cells[2])
-            elif label.startswith("1.3.2"):
-                if len(cells) >= 3:
-                    prices["tou_lt_12_on_peak"] = self._parse_price(cells[1])
-                    prices["tou_lt_12_off_peak"] = self._parse_price(cells[2])
-
-        missing = [key for key, _ in PRICE_SENSOR_DEFINITIONS if key != "ft_price" and key not in prices]
-        if missing:
-            raise ValueError(f"Missing tariff prices: {missing}")
-        return prices
-
-    def _parse_ft_page(self, html_text: str) -> float:
-        match = re.search(
-            r"Ft\s*\([^)]*\).*?<span[^>]*>\s*([0-9]+\.[0-9]+)\s*</span>\s*THB/Unit",
-            html_text,
-            re.S | re.I,
-        )
-        if match:
-            return float(match.group(1))
-
-        match = re.search(r"Ft\s*\([^)]*\).*?([0-9]+\.[0-9]+)\s*THB/Unit", html_text, re.S | re.I)
-        if match:
-            return float(match.group(1))
-
-        match = re.search(r"([0-9]+\.[0-9]+)\s*THB/Unit", html_text)
-        if match:
-            return float(match.group(1))
-
-        raise ValueError("Unable to parse FT price")
-
-    def _clean_text(self, text: str) -> str:
-        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-        text = re.sub(r"<[^>]+>", "", text)
-        text = html.unescape(text)
-        return text.strip()
-
-    def _parse_price(self, price_text: str) -> float:
-        price_text = price_text.replace("บาท", "").replace(",", "").strip()
-        match = re.search(r"([0-9]+\.?[0-9]*)", price_text)
-        if not match:
-            raise ValueError("Invalid price")
-        return float(match.group(1))
+    async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
+        session = async_get_clientsession(self.hass)
+        response = await session.get(STATE_URL, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        return parse_holiday_table(await response.text(), current_thai_year)
 
 
-class MeaTariffPriceSensor(SensorEntity):
-    """Sensor for a single MEA tariff price."""
+def _compute_tou_state(
+    current_date: datetime.date,
+    current_time: datetime.time,
+    holidays: set[datetime.date],
+) -> str:
+    """Return 'off-peak' or 'on-peak' for the given date/time."""
+    if current_date in holidays:
+        return "off-peak"
+    if current_date.weekday() >= 5:
+        return "off-peak"
+    if current_time >= datetime.time(22, 0) or current_time < datetime.time(9, 0):
+        return "off-peak"
+    return "on-peak"
 
-    _attr_icon = "mdi:currency-thb"
-    _attr_native_unit_of_measurement = PRICE_UNIT
+
+class _CoordinatorEntity(SensorEntity):
+    """Base class: wires up coordinator listener lifecycle and shared properties."""
+
     _attr_should_poll = False
 
-    def __init__(
-        self,
-        coordinator: MeaTariffPricingCoordinator,
-        key: str,
-        name: str,
-    ) -> None:
+    def __init__(self, coordinator: MeaTariffCoordinator) -> None:
         self.coordinator = coordinator
-        self._key = key
-        self._attr_name = name
-        self._attr_unique_id = f"{DOMAIN}_{key}"
         self._remove_listener: Callable[[], None] | None = None
 
     @property
@@ -313,8 +309,8 @@ class MeaTariffPriceSensor(SensorEntity):
         return self.coordinator.available
 
     @property
-    def native_value(self) -> float | None:
-        return self.coordinator.get_price(self._key)
+    def device_info(self) -> dict:
+        return _DEVICE_INFO
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -332,185 +328,36 @@ class MeaTariffPriceSensor(SensorEntity):
         self.async_write_ha_state()
 
 
-class MeaElectricityTariffSensor(SensorEntity):
+class MeaTariffPriceSensor(_CoordinatorEntity):
+    """Sensor for a single MEA tariff price."""
+
+    _attr_icon = "mdi:currency-thb"
+    _attr_native_unit_of_measurement = PRICE_UNIT
+
+    def __init__(self, coordinator: MeaTariffCoordinator, key: str, name: str) -> None:
+        super().__init__(coordinator)
+        self._key = key
+        self._attr_name = name
+        self._attr_unique_id = f"{DOMAIN}_{key}"
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.get_price(self._key)
+
+
+class MeaElectricityTariffSensor(_CoordinatorEntity):
     """Sensor for current MEA off-peak / on-peak state."""
 
     _attr_name = STATE_SENSOR_NAME
     _attr_icon = "mdi:clock-outline"
     _attr_unique_id = f"{DOMAIN}_tou_state"
     _attr_native_unit_of_measurement = None
-    _attr_should_poll = False
 
-    def __init__(self, hass: HomeAssistant) -> None:
-        self.hass = hass
-        self._store = Store(hass, STATE_STORAGE_VERSION, STATE_STORAGE_KEY)
-        self._holidays: set[datetime.date] = set()
-        self._stored_year: int | None = None
-        self._state: str | None = None
-        self._last_update: str | None = None
-        self._available = True
-        self._unsub_refresh = None
-
-    async def async_added_to_hass(self) -> None:
-        await self._load_holidays()
-        await self._refresh_if_needed()
-        self.async_write_ha_state()
-        self._unsub_refresh = async_track_time_change(
-            self.hass,
-            self._async_hourly_update,
-            minute=0,
-            second=0,
-        )
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._unsub_refresh is not None:
-            self._unsub_refresh()
-            self._unsub_refresh = None
-
-    @callback
-    def _async_hourly_update(self, now: datetime.datetime) -> None:
-        self.hass.async_create_task(self._refresh_and_write())
-
-    async def _refresh_and_write(self) -> None:
-        await self._refresh_if_needed()
-        self.async_write_ha_state()
+    def __init__(self, coordinator: MeaTariffCoordinator) -> None:
+        super().__init__(coordinator)
 
     @property
-    def native_value(self) -> str | None:
-        if self._state is None:
-            return "unknown"
-        return self._state
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    async def async_update(self) -> None:
-        await self._refresh_if_needed()
-
-    async def _load_holidays(self) -> None:
-        stored = await self._store.async_load()
-        if not stored:
-            return
-        year = stored.get("year")
-        dates = stored.get("holiday_dates", [])
-        if isinstance(year, int) and isinstance(dates, list):
-            self._stored_year = year
-            self._holidays = {
-                datetime.date.fromisoformat(date)
-                for date in dates
-                if isinstance(date, str)
-            }
-            self._last_update = stored.get("last_update")
-
-    async def _refresh_if_needed(self) -> None:
+    def native_value(self) -> str:
         now = dt_util.as_local(dt_util.utcnow())
-        current_thai_year = now.year + 543
-        if self._stored_year == current_thai_year and self._holidays:
-            self._state = self._compute_state(now.date(), now.time())
-            return
+        return _compute_tou_state(now.date(), now.time(), self.coordinator.get_holidays())
 
-        try:
-            holidays = await self._fetch_holidays(current_thai_year)
-            if holidays:
-                self._holidays = holidays
-                self._stored_year = current_thai_year
-                self._last_update = dt_util.utcnow().isoformat()
-                await self._store.async_save(
-                    {
-                        "year": self._stored_year,
-                        "holiday_dates": [
-                            date.isoformat() for date in sorted(self._holidays)
-                        ],
-                        "last_update": self._last_update,
-                    }
-                )
-        except Exception:
-            self._available = False
-
-        self._state = self._compute_state(now.date(), now.time())
-
-    def _compute_state(
-        self, current_date: datetime.date, current_time: datetime.time
-    ) -> str:
-        if current_date in self._holidays:
-            return "off-peak"
-
-        weekday = current_date.weekday()
-        if weekday >= 5:
-            return "off-peak"
-
-        if current_time >= datetime.time(22, 0) or current_time < datetime.time(9, 0):
-            return "off-peak"
-
-        return "on-peak"
-
-    async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
-        session = async_get_clientsession(self.hass)
-        response = await session.get(STATE_URL, headers={"User-Agent": "Mozilla/5.0"})
-        response.raise_for_status()
-        text = await response.text()
-        return self._parse_holiday_table(text, current_thai_year)
-
-    def _parse_holiday_table(
-        self, html_text: str, current_thai_year: int
-    ) -> set[datetime.date]:
-        table_match = re.search(
-            r"<table[^>]*class=\"table\"[^>]*>(.*?)</table>", html_text, re.S | re.I
-        )
-        if not table_match:
-            raise ValueError("Unable to find tariff table")
-
-        table_html = table_match.group(1)
-        header_cells = re.findall(r"<th[^>]*>(.*?)</th>", table_html, re.S | re.I)
-        year_columns = [self._clean_text(cell) for cell in header_cells[2:]]
-        year_to_index = {}
-        for index, year_text in enumerate(year_columns, start=2):
-            year_digits = re.search(r"(\d{4})", year_text)
-            if year_digits:
-                year_to_index[int(year_digits.group(1))] = index
-
-        if current_thai_year not in year_to_index:
-            if year_to_index:
-                current_thai_year = max(year_to_index)
-            else:
-                raise ValueError("No year columns found in tariff table")
-
-        tbody_match = re.search(r"<tbody>(.*?)</tbody>", table_html, re.S | re.I)
-        rows_html = tbody_match.group(1) if tbody_match else table_html
-        holidays: set[datetime.date] = set()
-
-        for row_match in re.finditer(r"<tr[^>]*>(.*?)</tr>", rows_html, re.S | re.I):
-            row_html = row_match.group(1)
-            cells = re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)
-            if len(cells) <= year_to_index[current_thai_year] - 1:
-                continue
-            cell_text = self._clean_text(cells[year_to_index[current_thai_year] - 1])
-            if not cell_text:
-                continue
-            first_line = cell_text.splitlines()[0].strip()
-            try:
-                holidays.add(self._parse_thai_date(first_line, current_thai_year - 543))
-            except ValueError:
-                continue
-
-        return holidays
-
-    def _clean_text(self, text: str) -> str:
-        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
-        text = re.sub(r"<[^>]+>", "", text)
-        text = html.unescape(text)
-        return text.strip()
-
-    def _parse_thai_date(self, date_text: str, year: int) -> datetime.date:
-        date_text = date_text.replace("\u00a0", " ").strip()
-        match = re.search(r"(\d{1,2})\s+([ก-๙]+)", date_text)
-        if not match:
-            raise ValueError("Invalid Thai date text")
-
-        day = int(match.group(1))
-        month_name = match.group(2).strip()
-        if month_name not in MONTHS_TH:
-            raise ValueError("Unknown Thai month: %s" % month_name)
-
-        return datetime.date(year, MONTHS_TH[month_name], day)
