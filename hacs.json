@@ -1,7 +1,5 @@
 {
   "name": "MEA Electricity Tariffs",
   "country": ["TH"],
-  "type": "integration",
-  "categories": ["energy"],
   "render_readme": true
 }
