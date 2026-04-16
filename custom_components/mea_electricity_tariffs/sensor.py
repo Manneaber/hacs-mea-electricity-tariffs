@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import html
 import re
+from typing import Any, Callable
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -13,10 +14,17 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-STORAGE_KEY = "mea_electricity_tariff_off_peak"
-STORAGE_VERSION = 1
-DATA_URL = "https://www.mea.or.th/electricity/electricity-tariffs/B0kv94Yol"
-DEFAULT_NAME = "MEA Electricity Tariff"
+from .const import DOMAIN
+
+STATE_STORAGE_KEY = "mea_electricity_tariff_off_peak"
+STATE_STORAGE_VERSION = 1
+PRICE_STORAGE_KEY = "mea_electricity_tariff_prices"
+PRICE_STORAGE_VERSION = 1
+STATE_URL = "https://www.mea.or.th/electricity/electricity-tariffs/B0kv94Yol"
+TARIFF_URL = "https://www.mea.or.th/our-services/tariff-calculation/other/D5xEaEwgU"
+FT_URL = "https://www.pea.co.th/en/our-services/tariff/ft"
+STATE_SENSOR_NAME = "MEA Time-of-Use State"
+PRICE_UNIT = "THB/kWh"
 MONTHS_TH = {
     "มกราคม": 1,
     "กุมภาพันธ์": 2,
@@ -32,15 +40,32 @@ MONTHS_TH = {
     "ธันวาคม": 12,
 }
 
+PRICE_SENSOR_DEFINITIONS = [
+    ("base_1_15", "MEA Tariff 15 units first (1 – 15)"),
+    ("base_16_25", "MEA Tariff 10 units next (16 – 25)"),
+    ("base_26_35", "MEA Tariff 10 units next (26 – 35)"),
+    ("base_36_100", "MEA Tariff 65 units next (36 – 100)"),
+    ("base_101_150", "MEA Tariff 50 units next (101 – 150)"),
+    ("base_151_400", "MEA Tariff 250 units next (151 – 400)"),
+    ("base_401_plus", "MEA Tariff above 400 units"),
+    ("tou_12_24_on_peak", "MEA TOU 12–24 kV On Peak"),
+    ("tou_12_24_off_peak", "MEA TOU 12–24 kV Off Peak"),
+    ("tou_lt_12_on_peak", "MEA TOU under 12 kV On Peak"),
+    ("tou_lt_12_off_peak", "MEA TOU under 12 kV Off Peak"),
+    ("ft_price", "MEA FT Price"),
+]
+
 
 async def async_setup_platform(
     hass: HomeAssistant,
-    config,
+    config: dict[str, Any],
     async_add_entities: AddEntitiesCallback,
     discovery_info=None,
 ) -> None:
     """Set up the MEA Electricity Tariff sensor platform."""
-    async_add_entities([MeaElectricityTariffSensor(hass)])
+    coordinator = MeaTariffPricingCoordinator(hass)
+    await coordinator.async_initialize()
+    async_add_entities(_build_price_entities(coordinator) + [MeaElectricityTariffSensor(hass)])
 
 
 async def async_setup_entry(
@@ -49,20 +74,276 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the MEA Electricity Tariff sensor platform from a config entry."""
-    async_add_entities([MeaElectricityTariffSensor(hass)])
+    coordinator = MeaTariffPricingCoordinator(hass)
+    await coordinator.async_initialize()
+    async_add_entities(_build_price_entities(coordinator) + [MeaElectricityTariffSensor(hass)])
+
+
+def _build_price_entities(coordinator: "MeaTariffPricingCoordinator") -> list[SensorEntity]:
+    return [
+        MeaTariffPriceSensor(coordinator, key, name)
+        for key, name in PRICE_SENSOR_DEFINITIONS
+    ]
+
+
+class MeaTariffPricingCoordinator:
+    """Shared data manager for MEA tariff prices."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+        self._store = Store(hass, PRICE_STORAGE_VERSION, PRICE_STORAGE_KEY)
+        self._prices: dict[str, float] = {}
+        self._ft_price: float | None = None
+        self._stored_year: int | None = None
+        self._stored_month: int | None = None
+        self._last_update: str | None = None
+        self._available = True
+        self._listeners: list[Callable[[], None]] = []
+        self._unsub_refresh = None
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def get_price(self, key: str) -> float | None:
+        if key == "ft_price":
+            return self._ft_price
+        return self._prices.get(key)
+
+    async def async_initialize(self) -> None:
+        await self._load()
+        await self._refresh_if_needed()
+        self._unsub_refresh = async_track_time_change(
+            self.hass,
+            self._async_daily_refresh,
+            hour=0,
+            minute=0,
+            second=0,
+        )
+
+    def async_add_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        self._listeners.append(listener)
+
+        def remove_listener() -> None:
+            if listener in self._listeners:
+                self._listeners.remove(listener)
+
+        return remove_listener
+
+    @callback
+    def _async_notify_listeners(self) -> None:
+        for listener in list(self._listeners):
+            listener()
+
+    @callback
+    def _async_daily_refresh(self, now: datetime.datetime) -> None:
+        self.hass.async_create_task(self._refresh_and_notify())
+
+    async def _refresh_and_notify(self) -> None:
+        updated = await self._refresh_if_needed()
+        if updated:
+            self._async_notify_listeners()
+
+    async def _load(self) -> None:
+        stored = await self._store.async_load()
+        if not stored:
+            return
+
+        year = stored.get("year")
+        month = stored.get("month")
+        prices = stored.get("prices", {})
+        ft_price = stored.get("ft_price")
+
+        if isinstance(year, int) and isinstance(month, int):
+            self._stored_year = year
+            self._stored_month = month
+
+        if isinstance(prices, dict):
+            self._prices = {
+                key: float(value)
+                for key, value in prices.items()
+                if value is not None
+            }
+
+        if isinstance(ft_price, (int, float, str)):
+            try:
+                self._ft_price = float(ft_price)
+            except ValueError:
+                self._ft_price = None
+
+        self._last_update = stored.get("last_update")
+
+    async def _refresh_if_needed(self) -> bool:
+        now = dt_util.now()
+        if self._stored_year == now.year and self._stored_month == now.month:
+            if self._prices and self._ft_price is not None:
+                return False
+
+        try:
+            await self._fetch_prices()
+            self._stored_year = now.year
+            self._stored_month = now.month
+            self._last_update = dt_util.utcnow().isoformat()
+            await self._store.async_save(
+                {
+                    "year": self._stored_year,
+                    "month": self._stored_month,
+                    "prices": self._prices,
+                    "ft_price": self._ft_price,
+                    "last_update": self._last_update,
+                }
+            )
+            self._available = True
+            return True
+        except Exception:
+            if not self._prices or self._ft_price is None:
+                self._available = False
+            return False
+
+    async def _fetch_prices(self) -> None:
+        session = async_get_clientsession(self.hass)
+
+        response = await session.get(TARIFF_URL, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        tariff_text = await response.text()
+        self._prices = self._parse_tariff_page(tariff_text)
+
+        response = await session.get(FT_URL, headers={"User-Agent": "Mozilla/5.0"})
+        response.raise_for_status()
+        ft_text = await response.text()
+        self._ft_price = self._parse_ft_page(ft_text)
+
+    def _parse_tariff_page(self, html_text: str) -> dict[str, float]:
+        prices: dict[str, float] = {}
+        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I):
+            cells = [self._clean_text(cell) for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)]
+            if len(cells) < 2:
+                continue
+            label = cells[0]
+            price_text = cells[-1]
+            if not price_text:
+                continue
+            try:
+                price = self._parse_price(price_text)
+            except ValueError:
+                continue
+
+            if "1 – 15" in label and "15 หน่วย" in label:
+                prices["base_1_15"] = price
+            elif "16 – 25" in label and "10 หน่วยต่อไป" in label:
+                prices["base_16_25"] = price
+            elif "26 – 35" in label and "10 หน่วยต่อไป" in label:
+                prices["base_26_35"] = price
+            elif "36 – 100" in label and "65 หน่วยต่อไป" in label:
+                prices["base_36_100"] = price
+            elif "101 – 150" in label and "50 หน่วยต่อไป" in label:
+                prices["base_101_150"] = price
+            elif "151 – 400" in label and "250 หน่วยต่อไป" in label:
+                prices["base_151_400"] = price
+            elif "401" in label or "เกินกว่า 400" in label:
+                prices["base_401_plus"] = price
+            elif label.startswith("1.3.1"):
+                if len(cells) >= 3:
+                    prices["tou_12_24_on_peak"] = self._parse_price(cells[1])
+                    prices["tou_12_24_off_peak"] = self._parse_price(cells[2])
+            elif label.startswith("1.3.2"):
+                if len(cells) >= 3:
+                    prices["tou_lt_12_on_peak"] = self._parse_price(cells[1])
+                    prices["tou_lt_12_off_peak"] = self._parse_price(cells[2])
+
+        missing = [key for key, _ in PRICE_SENSOR_DEFINITIONS if key != "ft_price" and key not in prices]
+        if missing:
+            raise ValueError(f"Missing tariff prices: {missing}")
+        return prices
+
+    def _parse_ft_page(self, html_text: str) -> float:
+        match = re.search(
+            r"Ft\s*\([^)]*\).*?<span[^>]*>\s*([0-9]+\.[0-9]+)\s*</span>\s*THB/Unit",
+            html_text,
+            re.S | re.I,
+        )
+        if match:
+            return float(match.group(1))
+
+        match = re.search(r"Ft\s*\([^)]*\).*?([0-9]+\.[0-9]+)\s*THB/Unit", html_text, re.S | re.I)
+        if match:
+            return float(match.group(1))
+
+        match = re.search(r"([0-9]+\.[0-9]+)\s*THB/Unit", html_text)
+        if match:
+            return float(match.group(1))
+
+        raise ValueError("Unable to parse FT price")
+
+    def _clean_text(self, text: str) -> str:
+        text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = html.unescape(text)
+        return text.strip()
+
+    def _parse_price(self, price_text: str) -> float:
+        price_text = price_text.replace("บาท", "").replace(",", "").strip()
+        match = re.search(r"([0-9]+\.?[0-9]*)", price_text)
+        if not match:
+            raise ValueError("Invalid price")
+        return float(match.group(1))
+
+
+class MeaTariffPriceSensor(SensorEntity):
+    """Sensor for a single MEA tariff price."""
+
+    _attr_icon = "mdi:currency-thb"
+    _attr_native_unit_of_measurement = PRICE_UNIT
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        coordinator: MeaTariffPricingCoordinator,
+        key: str,
+        name: str,
+    ) -> None:
+        self.coordinator = coordinator
+        self._key = key
+        self._attr_name = name
+        self._attr_unique_id = f"{DOMAIN}_{key}"
+        self._remove_listener: Callable[[], None] | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.available
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.get_price(self._key)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._remove_listener = self.coordinator.async_add_listener(
+            self._handle_coordinator_update
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener is not None:
+            self._remove_listener()
+            self._remove_listener = None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self.async_write_ha_state()
 
 
 class MeaElectricityTariffSensor(SensorEntity):
     """Sensor for current MEA off-peak / on-peak state."""
 
-    _attr_name = DEFAULT_NAME
+    _attr_name = STATE_SENSOR_NAME
     _attr_icon = "mdi:clock-outline"
+    _attr_unique_id = f"{DOMAIN}_tou_state"
     _attr_native_unit_of_measurement = None
     _attr_should_poll = False
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store = Store(hass, STATE_STORAGE_VERSION, STATE_STORAGE_KEY)
         self._holidays: set[datetime.date] = set()
         self._stored_year: int | None = None
         self._state: str | None = None
@@ -166,7 +447,7 @@ class MeaElectricityTariffSensor(SensorEntity):
 
     async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
         session = async_get_clientsession(self.hass)
-        response = await session.get(DATA_URL, headers={"User-Agent": "Mozilla/5.0"})
+        response = await session.get(STATE_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         text = await response.text()
         return self._parse_holiday_table(text, current_thai_year)
