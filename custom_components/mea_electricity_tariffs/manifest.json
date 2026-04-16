@@ -1,5 +1,5 @@
 {
-  "domain": "mea-electricity-tariffs",
+  "domain": "mea_electricity_tariffs",
   "name": "MEA Electricity Tariffs",
   "codeowners": ["@Manneaber"],
   "config_flow": true,
