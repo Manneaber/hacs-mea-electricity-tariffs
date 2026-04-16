@@ -1,0 +1,6 @@
+{
+  "name": "MEA Electricity Tariffs",
+  "country": ["TH"],
+  "domains": ["sensor"],
+  "render_readme": true
+}
