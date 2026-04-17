@@ -1,7 +1,7 @@
 # MEA Electricity Tariffs
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-0.1.2-blue)
+![version](https://img.shields.io/badge/version-0.2.0-blue)
 
 Home Assistant custom integration for MEA (Metropolitan Electricity Authority) electricity tariffs.
 
