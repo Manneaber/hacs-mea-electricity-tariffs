@@ -37,13 +37,13 @@ MONTHS_TH = {
 
 # Price sensor definitions
 PRICE_SENSOR_DEFINITIONS = [
-    ("base_1_15", "MEA Tariff 15 units first (1 – 15)"),
-    ("base_16_25", "MEA Tariff 10 units next (16 – 25)"),
-    ("base_26_35", "MEA Tariff 10 units next (26 – 35)"),
-    ("base_36_100", "MEA Tariff 65 units next (36 – 100)"),
-    ("base_101_150", "MEA Tariff 50 units next (101 – 150)"),
-    ("base_151_400", "MEA Tariff 250 units next (151 – 400)"),
-    ("base_401_plus", "MEA Tariff above 400 units"),
+    ("base_1_15", "MEA Tariff 1 – 15 Unit"),
+    ("base_16_25", "MEA Tariff 16 – 25 Unit"),
+    ("base_26_35", "MEA Tariff 26 – 35 Unit"),
+    ("base_36_100", "MEA Tariff 36 – 100 Unit"),
+    ("base_101_150", "MEA Tariff 101 – 150 Unit"),
+    ("base_151_400", "MEA Tariff 151 – 400 Unit"),
+    ("base_401_plus", "MEA Tariff 401+ Unit"),
     ("tou_12_24_on_peak", "MEA TOU 12–24 kV On Peak"),
     ("tou_12_24_off_peak", "MEA TOU 12–24 kV Off Peak"),
     ("tou_lt_12_on_peak", "MEA TOU under 12 kV On Peak"),
