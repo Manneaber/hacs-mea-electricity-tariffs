@@ -105,16 +105,21 @@ class MeaTariffCoordinator:
 
     async def async_force_refresh(self) -> None:
         """Force a fetch from the remote sources, bypassing cache."""
-        self._prices = {}
-        self._ft_price = None
+        now = dt_util.now()
+        today = dt_util.as_local(dt_util.utcnow()).date()
+
         try:
-            await self._fetch_prices()
-            now = dt_util.now()
+            await self._fetch_tariff_prices()
             self._stored_price_year = now.year
             self._stored_price_month = now.month
             self._last_price_update = dt_util.utcnow().isoformat()
         except Exception:
-            self._available = False
+            self._prices = {}
+
+        try:
+            await self._fetch_ft_price(today)
+        except Exception:
+            self._ft_price = None
 
         try:
             now_local = dt_util.as_local(dt_util.utcnow())
@@ -127,8 +132,8 @@ class MeaTariffCoordinator:
         except Exception:
             pass
 
+        self._available = bool(self._prices and self._ft_price is not None)
         await self._save()
-        self._available = True
         self._async_notify_listeners()
 
     async def async_cleanup(self) -> None:
@@ -224,26 +229,45 @@ class MeaTariffCoordinator:
 
     async def _refresh_prices_if_needed(self) -> bool:
         now = dt_util.now()
-        if (
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        prices_current = (
             self._stored_price_year == now.year
             and self._stored_price_month == now.month
             and self._prices
+        )
+        ft_current = (
+            self._stored_price_year == now.year
+            and self._stored_price_month == now.month
             and self._ft_price is not None
-        ):
+        )
+        if prices_current and ft_current:
             return False
 
-        try:
-            await self._fetch_prices()
+        updated = False
+        if not prices_current:
+            try:
+                await self._fetch_tariff_prices()
+                updated = True
+            except Exception:
+                if not self._prices:
+                    self._available = False
+
+        if not ft_current:
+            try:
+                await self._fetch_ft_price(today)
+                updated = True
+            except Exception:
+                if self._ft_price is None:
+                    self._available = False
+
+        if updated:
             self._stored_price_year = now.year
             self._stored_price_month = now.month
             self._last_price_update = dt_util.utcnow().isoformat()
             await self._save()
-            self._available = True
-            return True
-        except Exception:
-            if not self._prices or self._ft_price is None:
-                self._available = False
-            return False
+            if self._prices and self._ft_price is not None:
+                self._available = True
+        return updated
 
     async def _refresh_holidays_if_needed(self) -> bool:
         now_local = dt_util.as_local(dt_util.utcnow())
@@ -265,15 +289,20 @@ class MeaTariffCoordinator:
         return False
 
     async def _fetch_prices(self) -> None:
-        session = async_get_clientsession(self.hass)
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        await self._fetch_tariff_prices()
+        await self._fetch_ft_price(today)
 
+    async def _fetch_tariff_prices(self) -> None:
+        session = async_get_clientsession(self.hass)
         response = await session.get(TARIFF_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
         self._prices = parse_tariff_page(await response.text())
 
+    async def _fetch_ft_price(self, today: datetime.date) -> None:
+        session = async_get_clientsession(self.hass)
         response = await session.get(FT_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
-        today = dt_util.as_local(dt_util.utcnow()).date()
         self._ft_price = parse_ft_page(await response.text(), today)
 
     async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
