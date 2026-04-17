@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 from typing import Callable
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -44,6 +44,7 @@ async def async_setup_entry(
         for key, name in PRICE_SENSOR_DEFINITIONS
     ]
     sensors.append(MeaElectricityTariffSensor(coordinator))
+    sensors.append(MeaLastUpdateSensor(coordinator))
     async_add_entities(sensors)
 
 
@@ -114,12 +115,12 @@ class MeaTariffCoordinator:
             self._stored_price_month = now.month
             self._last_price_update = dt_util.utcnow().isoformat()
         except Exception:
-            self._prices = {}
+            pass  # Keep stale prices; sensor shows last known value
 
         try:
             await self._fetch_ft_price(today)
         except Exception:
-            self._ft_price = None
+            pass  # Keep stale FT rate; sensor shows last known value
 
         try:
             now_local = dt_util.as_local(dt_util.utcnow())
@@ -394,3 +395,29 @@ class MeaElectricityTariffSensor(_CoordinatorEntity):
         return _compute_tou_state(
             now.date(), now.time(), self.coordinator.get_holidays()
         )
+
+
+class MeaLastUpdateSensor(_CoordinatorEntity):
+    """Sensor showing when tariff prices were last successfully fetched."""
+
+    _attr_name = "MEA Tariff Last Updated"
+    _attr_icon = "mdi:update"
+    _attr_unique_id = f"{DOMAIN}_last_updated"
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_native_unit_of_measurement = None
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator._last_price_update is not None
+
+    @property
+    def native_value(self) -> datetime.datetime | None:
+        ts = self.coordinator._last_price_update
+        if ts is None:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(ts).replace(
+                tzinfo=datetime.timezone.utc
+            )
+        except ValueError:
+            return None

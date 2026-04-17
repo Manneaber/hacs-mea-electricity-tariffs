@@ -34,7 +34,7 @@ class MeaTariffRefreshButton(ButtonEntity):
 
     @property
     def available(self) -> bool:
-        return self.coordinator.available
+        return True  # Always allow refresh, even when data is unavailable
 
     @property
     def device_info(self) -> DeviceInfo:
