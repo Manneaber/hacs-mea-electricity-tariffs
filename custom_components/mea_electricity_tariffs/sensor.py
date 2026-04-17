@@ -271,7 +271,8 @@ class MeaTariffCoordinator:
 
         response = await session.get(FT_URL, headers={"User-Agent": "Mozilla/5.0"})
         response.raise_for_status()
-        self._ft_price = parse_ft_page(await response.text())
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        self._ft_price = parse_ft_page(await response.text(), today)
 
     async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
         session = async_get_clientsession(self.hass)

@@ -73,17 +73,59 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
     return prices
 
 
-def parse_ft_page(html_text: str) -> float:
-    """Extract the current FT price from the PEA FT HTML page."""
-    for pattern in (
-        r"Ft\s*\([^)]*\).*?<span[^>]*>\s*([0-9]+\.[0-9]+)\s*</span>\s*THB/Unit",
-        r"Ft\s*\([^)]*\).*?([0-9]+\.[0-9]+)\s*THB/Unit",
-        r"([0-9]+\.[0-9]+)\s*THB/Unit",
-    ):
-        match = re.search(pattern, html_text, re.S | re.I)
-        if match:
-            return float(match.group(1))
-    raise ValueError("Unable to parse FT price")
+def parse_ft_page(html_text: str, today: datetime.date | None = None) -> float:
+    """Extract the current FT price from the MEA FT history page.
+
+    The table lists values in satang/unit by Thai year and month.
+    Returns the value converted to THB/kWh (satang ÷ 100).
+    The *today* parameter allows injecting the reference date for testing.
+    """
+    if today is None:
+        today = datetime.date.today()
+
+    current_thai_year = today.year + 543
+    current_month = today.month  # 1-based; cells[1]=Jan … cells[12]=Dec
+
+    # Collect all data rows keyed by Thai year.
+    rows: dict[int, list[str]] = {}
+    for row_match in re.finditer(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I):
+        cells = [
+            clean_html_cell(cell)
+            for cell in re.findall(
+                r"<td[^>]*>(.*?)</td>", row_match.group(1), re.S | re.I
+            )
+        ]
+        if len(cells) < 2:
+            continue
+        year_match = re.search(r"(\d{4})", cells[0])
+        if not year_match:
+            continue
+        thai_year = int(year_match.group(1))
+        if 2500 <= thai_year <= 2700:  # sanity-check Thai BE year range
+            rows[thai_year] = cells
+
+    if not rows:
+        raise ValueError("Unable to find FT history table")
+
+    # Walk back from the current Thai year to find the most recent published value.
+    # For the current year only look at months up to and including the current month;
+    # for prior years scan all 12 months in reverse.
+    for thai_year in range(current_thai_year, current_thai_year - 2, -1):
+        cells = rows.get(thai_year)
+        if cells is None:
+            continue
+        max_month = current_month if thai_year == current_thai_year else 12
+        for month in range(max_month, 0, -1):
+            if month >= len(cells):
+                continue
+            value_str = cells[month].strip()
+            if not value_str:
+                continue
+            num_match = re.search(r"(-?[0-9]+\.?[0-9]*)", value_str)
+            if num_match:
+                return float(num_match.group(1)) / 100.0
+
+    raise ValueError(f"Unable to determine FT price for {today.isoformat()}")
 
 
 def parse_holiday_table(html_text: str, current_thai_year: int) -> set[datetime.date]:

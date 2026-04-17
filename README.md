@@ -1,7 +1,7 @@
 # MEA Electricity Tariffs
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
-![version](https://img.shields.io/badge/version-0.2.0-blue)
+![version](https://img.shields.io/badge/version-0.3.0-blue)
 
 Home Assistant custom integration for MEA (Metropolitan Electricity Authority) electricity tariffs.
 
@@ -19,7 +19,7 @@ This integration provides:
 - Parses MEA tariff pages from:
   - `https://www.mea.or.th/electricity/electricity-tariffs/B0kv94Yol` — holiday schedule.
   - `https://www.mea.or.th/our-services/tariff-calculation/other/D5xEaEwgU` — base and TOU tariff prices.
-  - `https://www.pea.co.th/en/our-services/tariff/ft` — FT price (PEA site is used because the FT rate is equal between MEA and PEA).
+  - `https://www.mea.or.th/our-services/tariff-calculation/ft/bG2m6iSUN` — FT rate history.
 - Supports config entry setup through the Home Assistant UI.
 - Persists tariff prices and holidays in Home Assistant storage so they survive restarts.
 
@@ -51,7 +51,7 @@ The integration exposes the following entities (all grouped under one device):
 | `sensor.mea_tou_12_24_kv_off_peak` | MEA TOU 12–24 kV Off Peak | THB/kWh |
 | `sensor.mea_tou_under_12_kv_on_peak` | MEA TOU under 12 kV On Peak | THB/kWh |
 | `sensor.mea_tou_under_12_kv_off_peak` | MEA TOU under 12 kV Off Peak | THB/kWh |
-| `sensor.mea_ft_price` | MEA FT Price | THB/kWh |
+| `sensor.mea_ft_price` | MEA FT Rate | THB/kWh |
 
 ### Button
 
