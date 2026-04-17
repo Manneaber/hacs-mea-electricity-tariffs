@@ -105,6 +105,8 @@ class MeaTariffCoordinator:
 
     async def async_force_refresh(self) -> None:
         """Force a fetch from the remote sources, bypassing cache."""
+        self._prices = {}
+        self._ft_price = None
         try:
             await self._fetch_prices()
             now = dt_util.now()
@@ -112,7 +114,7 @@ class MeaTariffCoordinator:
             self._stored_price_month = now.month
             self._last_price_update = dt_util.utcnow().isoformat()
         except Exception:
-            pass
+            self._available = False
 
         try:
             now_local = dt_util.as_local(dt_util.utcnow())
