@@ -11,7 +11,7 @@ STORAGE_VERSION = 1
 # URLs
 STATE_URL = "https://www.mea.or.th/electricity/electricity-tariffs/B0kv94Yol"
 TARIFF_URL = "https://www.mea.or.th/our-services/tariff-calculation/other/D5xEaEwgU"
-FT_URL = "https://www.pea.co.th/en/our-services/tariff/ft"
+FT_URL = "https://www.mea.or.th/our-services/tariff-calculation/ft/bG2m6iSUN"
 
 # Device / sensor meta
 STATE_SENSOR_NAME = "MEA Time-of-Use State"
@@ -48,7 +48,7 @@ PRICE_SENSOR_DEFINITIONS = [
     ("tou_12_24_off_peak", "MEA TOU 12–24 kV Off Peak"),
     ("tou_lt_12_on_peak", "MEA TOU under 12 kV On Peak"),
     ("tou_lt_12_off_peak", "MEA TOU under 12 kV Off Peak"),
-    ("ft_price", "MEA FT Price"),
+    ("ft_price", "MEA FT Rate"),
 ]
 
 # Single-value tariff row matchers: (price_key, required_substrings_in_label).
