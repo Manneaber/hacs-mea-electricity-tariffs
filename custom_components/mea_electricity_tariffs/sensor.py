@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from typing import Callable
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -28,6 +29,8 @@ from .const import (
     TARIFF_URL,
 )
 from .parser import parse_ft_page, parse_holiday_table, parse_tariff_page
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -106,6 +109,7 @@ class MeaTariffCoordinator:
 
     async def async_force_refresh(self) -> None:
         """Force a fetch from the remote sources, bypassing cache."""
+        _LOGGER.debug("MEA tariff force refresh started")
         now = dt_util.now()
         today = dt_util.as_local(dt_util.utcnow()).date()
 
@@ -114,13 +118,15 @@ class MeaTariffCoordinator:
             self._stored_price_year = now.year
             self._stored_price_month = now.month
             self._last_price_update = dt_util.utcnow().isoformat()
-        except Exception:
-            pass  # Keep stale prices; sensor shows last known value
+            _LOGGER.debug("MEA tariff prices fetched successfully: %s", self._prices)
+        except Exception as err:
+            _LOGGER.error("Failed to fetch MEA tariff prices: %s", err, exc_info=True)
 
         try:
             await self._fetch_ft_price(today)
-        except Exception:
-            pass  # Keep stale FT rate; sensor shows last known value
+            _LOGGER.debug("MEA FT price fetched successfully: %s", self._ft_price)
+        except Exception as err:
+            _LOGGER.error("Failed to fetch MEA FT price: %s", err, exc_info=True)
 
         try:
             now_local = dt_util.as_local(dt_util.utcnow())
@@ -130,10 +136,21 @@ class MeaTariffCoordinator:
                 self._holidays = holidays
                 self._stored_holiday_year = current_thai_year
                 self._last_holiday_update = dt_util.utcnow().isoformat()
-        except Exception:
-            pass
+            _LOGGER.debug(
+                "MEA holidays fetched: %d dates for Thai year %d",
+                len(self._holidays),
+                current_thai_year,
+            )
+        except Exception as err:
+            _LOGGER.error("Failed to fetch MEA holidays: %s", err, exc_info=True)
 
         self._available = bool(self._prices and self._ft_price is not None)
+        _LOGGER.info(
+            "MEA tariff refresh complete — available=%s, prices=%s, ft_price=%s",
+            self._available,
+            self._prices,
+            self._ft_price,
+        )
         await self._save()
         self._async_notify_listeners()
 
@@ -249,7 +266,11 @@ class MeaTariffCoordinator:
             try:
                 await self._fetch_tariff_prices()
                 updated = True
-            except Exception:
+                _LOGGER.debug("MEA tariff prices refreshed: %s", self._prices)
+            except Exception as err:
+                _LOGGER.error(
+                    "Failed to refresh MEA tariff prices: %s", err, exc_info=True
+                )
                 if not self._prices:
                     self._available = False
 
@@ -257,7 +278,9 @@ class MeaTariffCoordinator:
             try:
                 await self._fetch_ft_price(today)
                 updated = True
-            except Exception:
+                _LOGGER.debug("MEA FT price refreshed: %s", self._ft_price)
+            except Exception as err:
+                _LOGGER.error("Failed to refresh MEA FT price: %s", err, exc_info=True)
                 if self._ft_price is None:
                     self._available = False
 
@@ -283,8 +306,14 @@ class MeaTariffCoordinator:
                 self._stored_holiday_year = current_thai_year
                 self._last_holiday_update = dt_util.utcnow().isoformat()
                 await self._save()
+                _LOGGER.debug(
+                    "MEA holidays refreshed: %d dates for Thai year %d",
+                    len(holidays),
+                    current_thai_year,
+                )
                 return True
-        except Exception:
+        except Exception as err:
+            _LOGGER.error("Failed to refresh MEA holidays: %s", err, exc_info=True)
             if not self._holidays:
                 self._available = False
         return False
@@ -295,22 +324,34 @@ class MeaTariffCoordinator:
         await self._fetch_ft_price(today)
 
     async def _fetch_tariff_prices(self) -> None:
+        _LOGGER.debug("Fetching MEA tariff page: %s", TARIFF_URL)
         session = async_get_clientsession(self.hass)
         response = await session.get(TARIFF_URL, headers={"User-Agent": "Mozilla/5.0"})
+        _LOGGER.debug("MEA tariff page HTTP status: %s", response.status)
         response.raise_for_status()
-        self._prices = parse_tariff_page(await response.text())
+        html = await response.text()
+        _LOGGER.debug("MEA tariff page response length: %d chars", len(html))
+        self._prices = parse_tariff_page(html)
 
     async def _fetch_ft_price(self, today: datetime.date) -> None:
+        _LOGGER.debug("Fetching MEA FT page: %s", FT_URL)
         session = async_get_clientsession(self.hass)
         response = await session.get(FT_URL, headers={"User-Agent": "Mozilla/5.0"})
+        _LOGGER.debug("MEA FT page HTTP status: %s", response.status)
         response.raise_for_status()
-        self._ft_price = parse_ft_page(await response.text(), today)
+        html = await response.text()
+        _LOGGER.debug("MEA FT page response length: %d chars", len(html))
+        self._ft_price = parse_ft_page(html, today)
 
     async def _fetch_holidays(self, current_thai_year: int) -> set[datetime.date]:
+        _LOGGER.debug("Fetching MEA state/holiday page: %s", STATE_URL)
         session = async_get_clientsession(self.hass)
         response = await session.get(STATE_URL, headers={"User-Agent": "Mozilla/5.0"})
+        _LOGGER.debug("MEA state page HTTP status: %s", response.status)
         response.raise_for_status()
-        return parse_holiday_table(await response.text(), current_thai_year)
+        html = await response.text()
+        _LOGGER.debug("MEA state page response length: %d chars", len(html))
+        return parse_holiday_table(html, current_thai_year)
 
 
 def _compute_tou_state(
