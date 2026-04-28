@@ -136,7 +136,11 @@ class MeaTariffCoordinator:
                 self._holidays = holidays
                 self._stored_holiday_year = current_thai_year
                 self._last_holiday_update = dt_util.utcnow().isoformat()
-            _LOGGER.debug("MEA holidays fetched: %d dates for Thai year %d", len(self._holidays), current_thai_year)
+            _LOGGER.debug(
+                "MEA holidays fetched: %d dates for Thai year %d",
+                len(self._holidays),
+                current_thai_year,
+            )
         except Exception as err:
             _LOGGER.error("Failed to fetch MEA holidays: %s", err, exc_info=True)
 
@@ -264,7 +268,9 @@ class MeaTariffCoordinator:
                 updated = True
                 _LOGGER.debug("MEA tariff prices refreshed: %s", self._prices)
             except Exception as err:
-                _LOGGER.error("Failed to refresh MEA tariff prices: %s", err, exc_info=True)
+                _LOGGER.error(
+                    "Failed to refresh MEA tariff prices: %s", err, exc_info=True
+                )
                 if not self._prices:
                     self._available = False
 
@@ -300,7 +306,11 @@ class MeaTariffCoordinator:
                 self._stored_holiday_year = current_thai_year
                 self._last_holiday_update = dt_util.utcnow().isoformat()
                 await self._save()
-                _LOGGER.debug("MEA holidays refreshed: %d dates for Thai year %d", len(holidays), current_thai_year)
+                _LOGGER.debug(
+                    "MEA holidays refreshed: %d dates for Thai year %d",
+                    len(holidays),
+                    current_thai_year,
+                )
                 return True
         except Exception as err:
             _LOGGER.error("Failed to refresh MEA holidays: %s", err, exc_info=True)

@@ -50,7 +50,9 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
         _LOGGER.error(
             "Cannot locate tariff section markers in MEA tariff page. "
             "pos11=%d pos12=%d. Page snippet (first 2000 chars): %s",
-            pos11, pos12, html_text[:2000],
+            pos11,
+            pos12,
+            html_text[:2000],
         )
         raise ValueError("Cannot locate type 1.1 / 1.2 tariff sections in page")
 
@@ -107,7 +109,9 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
         _LOGGER.error(
             "MEA tariff parse incomplete — missing keys: %s. "
             "Parsed prices: %s. Page snippet around section 1.2 (2000 chars): %s",
-            missing, prices, html_text[pos12:pos12 + 2000],
+            missing,
+            prices,
+            html_text[pos12 : pos12 + 2000],
         )
         raise ValueError(f"Missing tariff prices: {missing}")
     return prices
