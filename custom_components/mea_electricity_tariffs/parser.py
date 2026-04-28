@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import datetime
 import html
+import logging
 import re
+
+_LOGGER = logging.getLogger(__name__)
+
 
 from .const import (
     MONTHS_TH,
@@ -44,6 +48,11 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
     pos_tou = html_text.find(TARIFF_SECTION_MARKER_TOU)
 
     if pos11 == -1 or pos12 == -1:
+        _LOGGER.error(
+            "Cannot locate tariff section markers in MEA tariff page. "
+            "pos11=%d pos12=%d. Page snippet (first 2000 chars): %s",
+            pos11, pos12, html_text[:2000],
+        )
         raise ValueError("Cannot locate type 1.1 / 1.2 tariff sections in page")
 
     sec11_html = html_text[pos11:pos12]
@@ -96,6 +105,11 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
         if key != "ft_price" and key not in prices
     ]
     if missing:
+        _LOGGER.error(
+            "MEA tariff parse incomplete — missing keys: %s. "
+            "Parsed prices: %s. Page snippet around section 1.2 (2000 chars): %s",
+            missing, prices, html_text[pos12:pos12 + 2000],
+        )
         raise ValueError(f"Missing tariff prices: {missing}")
     return prices
 
@@ -132,6 +146,10 @@ def parse_ft_page(html_text: str, today: datetime.date | None = None) -> float:
             rows[thai_year] = cells
 
     if not rows:
+        _LOGGER.error(
+            "Unable to find FT history table in MEA FT page. Page snippet (first 2000 chars): %s",
+            html_text[:2000],
+        )
         raise ValueError("Unable to find FT history table")
 
     # Walk back from the current Thai year to find the most recent published value.
@@ -161,6 +179,10 @@ def parse_holiday_table(html_text: str, current_thai_year: int) -> set[datetime.
         r'<table[^>]*class="table"[^>]*>(.*?)</table>', html_text, re.S | re.I
     )
     if not table_match:
+        _LOGGER.error(
+            "Unable to find holiday table in MEA state page. Page snippet (first 2000 chars): %s",
+            html_text[:2000],
+        )
         raise ValueError("Unable to find holiday table")
 
     table_html = table_match.group(1)
