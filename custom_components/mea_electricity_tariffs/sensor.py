@@ -4,8 +4,6 @@ import datetime
 import logging
 from typing import Callable
 
-_LOGGER = logging.getLogger(__name__)
-
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -31,6 +29,8 @@ from .const import (
     TARIFF_URL,
 )
 from .parser import parse_ft_page, parse_holiday_table, parse_tariff_page
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(

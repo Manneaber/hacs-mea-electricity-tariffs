@@ -7,9 +7,6 @@ import html
 import logging
 import re
 
-_LOGGER = logging.getLogger(__name__)
-
-
 from .const import (
     MONTHS_TH,
     PRICE_SENSOR_DEFINITIONS,
@@ -20,6 +17,8 @@ from .const import (
     TARIFF_SECTION_MARKER_TOU,
     TARIFF_TOU_MATCHERS,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def clean_html_cell(text: str) -> str:
