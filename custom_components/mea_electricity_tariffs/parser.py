@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import datetime
 import html
+import logging
 import re
 
 from .const import (
     MONTHS_TH,
     PRICE_SENSOR_DEFINITIONS,
-    TARIFF_ROW_MATCHERS,
+    TARIFF_ROW_MATCHERS_11,
+    TARIFF_ROW_MATCHERS_12,
+    TARIFF_SECTION_MARKER_11,
+    TARIFF_SECTION_MARKER_12,
+    TARIFF_SECTION_MARKER_TOU,
     TARIFF_TOU_MATCHERS,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def clean_html_cell(text: str) -> str:
@@ -34,28 +41,58 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
     """Parse the MEA tariff HTML page and return a {key: price} mapping."""
     prices: dict[str, float] = {}
 
-    for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I):
+    # Locate section boundaries by their header text.
+    pos11 = html_text.find(TARIFF_SECTION_MARKER_11)
+    pos12 = html_text.find(TARIFF_SECTION_MARKER_12)
+    pos_tou = html_text.find(TARIFF_SECTION_MARKER_TOU)
+
+    if pos11 == -1 or pos12 == -1:
+        _LOGGER.error(
+            "Cannot locate tariff section markers in MEA tariff page. "
+            "pos11=%d pos12=%d. Page snippet (first 2000 chars): %s",
+            pos11,
+            pos12,
+            html_text[:2000],
+        )
+        raise ValueError("Cannot locate type 1.1 / 1.2 tariff sections in page")
+
+    sec11_html = html_text[pos11:pos12]
+    sec12_end = pos_tou if pos_tou != -1 else len(html_text)
+    sec12_html = html_text[pos12:sec12_end]
+    tou_html = html_text[pos_tou:] if pos_tou != -1 else ""
+
+    # Parse each base-rate section with its own matchers.
+    for section_html, matchers in (
+        (sec11_html, TARIFF_ROW_MATCHERS_11),
+        (sec12_html, TARIFF_ROW_MATCHERS_12),
+    ):
+        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", section_html, re.S | re.I):
+            cells = [
+                clean_html_cell(cell)
+                for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)
+            ]
+            if len(cells) < 2:
+                continue
+            label = cells[0]
+            for key, required in matchers:
+                if key not in prices and all(s in label for s in required):
+                    try:
+                        prices[key] = parse_price(cells[-1])
+                    except ValueError:
+                        pass
+                    break
+
+    # Multi-column TOU rows — scan the TOU section only.
+    for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", tou_html, re.S | re.I):
         cells = [
             clean_html_cell(cell)
             for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)
         ]
-        if len(cells) < 2:
+        if len(cells) < 3:
             continue
-
         label = cells[0]
-
-        # Single-value base tariff rows — first matching entry wins.
-        for key, required in TARIFF_ROW_MATCHERS:
-            if key not in prices and all(s in label for s in required):
-                try:
-                    prices[key] = parse_price(cells[-1])
-                except ValueError:
-                    pass
-                break
-
-        # Multi-column TOU rows.
         for prefix, on_key, off_key in TARIFF_TOU_MATCHERS:
-            if label.startswith(prefix) and len(cells) >= 3:
+            if label.startswith(prefix):
                 try:
                     prices[on_key] = parse_price(cells[1])
                     prices[off_key] = parse_price(cells[2])
@@ -69,6 +106,13 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
         if key != "ft_price" and key not in prices
     ]
     if missing:
+        _LOGGER.error(
+            "MEA tariff parse incomplete — missing keys: %s. "
+            "Parsed prices: %s. Page snippet around section 1.2 (2000 chars): %s",
+            missing,
+            prices,
+            html_text[pos12 : pos12 + 2000],
+        )
         raise ValueError(f"Missing tariff prices: {missing}")
     return prices
 
@@ -105,6 +149,10 @@ def parse_ft_page(html_text: str, today: datetime.date | None = None) -> float:
             rows[thai_year] = cells
 
     if not rows:
+        _LOGGER.error(
+            "Unable to find FT history table in MEA FT page. Page snippet (first 2000 chars): %s",
+            html_text[:2000],
+        )
         raise ValueError("Unable to find FT history table")
 
     # Walk back from the current Thai year to find the most recent published value.
@@ -134,6 +182,10 @@ def parse_holiday_table(html_text: str, current_thai_year: int) -> set[datetime.
         r'<table[^>]*class="table"[^>]*>(.*?)</table>', html_text, re.S | re.I
     )
     if not table_match:
+        _LOGGER.error(
+            "Unable to find holiday table in MEA state page. Page snippet (first 2000 chars): %s",
+            html_text[:2000],
+        )
         raise ValueError("Unable to find holiday table")
 
     table_html = table_match.group(1)
