@@ -9,7 +9,11 @@ import re
 from .const import (
     MONTHS_TH,
     PRICE_SENSOR_DEFINITIONS,
-    TARIFF_ROW_MATCHERS,
+    TARIFF_ROW_MATCHERS_11,
+    TARIFF_ROW_MATCHERS_12,
+    TARIFF_SECTION_MARKER_11,
+    TARIFF_SECTION_MARKER_12,
+    TARIFF_SECTION_MARKER_TOU,
     TARIFF_TOU_MATCHERS,
 )
 
@@ -34,28 +38,51 @@ def parse_tariff_page(html_text: str) -> dict[str, float]:
     """Parse the MEA tariff HTML page and return a {key: price} mapping."""
     prices: dict[str, float] = {}
 
-    for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I):
+    # Locate section boundaries by their header text.
+    pos11 = html_text.find(TARIFF_SECTION_MARKER_11)
+    pos12 = html_text.find(TARIFF_SECTION_MARKER_12)
+    pos_tou = html_text.find(TARIFF_SECTION_MARKER_TOU)
+
+    if pos11 == -1 or pos12 == -1:
+        raise ValueError("Cannot locate type 1.1 / 1.2 tariff sections in page")
+
+    sec11_html = html_text[pos11:pos12]
+    sec12_end = pos_tou if pos_tou != -1 else len(html_text)
+    sec12_html = html_text[pos12:sec12_end]
+    tou_html = html_text[pos_tou:] if pos_tou != -1 else ""
+
+    # Parse each base-rate section with its own matchers.
+    for section_html, matchers in (
+        (sec11_html, TARIFF_ROW_MATCHERS_11),
+        (sec12_html, TARIFF_ROW_MATCHERS_12),
+    ):
+        for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", section_html, re.S | re.I):
+            cells = [
+                clean_html_cell(cell)
+                for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)
+            ]
+            if len(cells) < 2:
+                continue
+            label = cells[0]
+            for key, required in matchers:
+                if key not in prices and all(s in label for s in required):
+                    try:
+                        prices[key] = parse_price(cells[-1])
+                    except ValueError:
+                        pass
+                    break
+
+    # Multi-column TOU rows — scan the TOU section only.
+    for row_html in re.findall(r"<tr[^>]*>(.*?)</tr>", tou_html, re.S | re.I):
         cells = [
             clean_html_cell(cell)
             for cell in re.findall(r"<td[^>]*>(.*?)</td>", row_html, re.S | re.I)
         ]
-        if len(cells) < 2:
+        if len(cells) < 3:
             continue
-
         label = cells[0]
-
-        # Single-value base tariff rows — first matching entry wins.
-        for key, required in TARIFF_ROW_MATCHERS:
-            if key not in prices and all(s in label for s in required):
-                try:
-                    prices[key] = parse_price(cells[-1])
-                except ValueError:
-                    pass
-                break
-
-        # Multi-column TOU rows.
         for prefix, on_key, off_key in TARIFF_TOU_MATCHERS:
-            if label.startswith(prefix) and len(cells) >= 3:
+            if label.startswith(prefix):
                 try:
                     prices[on_key] = parse_price(cells[1])
                     prices[off_key] = parse_price(cells[2])
